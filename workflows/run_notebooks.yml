@@ -2,8 +2,7 @@ name: Ejecutar notebooks (viernes 10pm COL)
 
 on:
   schedule:
-    # 22:00 Colombia (UTC-5) = 03:00 UTC del sábado
-    - cron: '0 3 * * 6'
+    - cron: '0 3 * * 6'  # 22:00 Colombia (UTC-5)
   workflow_dispatch: {}
 
 jobs:
@@ -12,7 +11,10 @@ jobs:
     permissions:
       contents: read
     env:
-      MI_JSON: ${{ secrets.MI_JSON }}
+      USER_API:     ${{ secrets.USER_API }}
+      SECRET_API:   ${{ secrets.SECRET_API }}
+      CORREO_COLAB: ${{ secrets.CORREO_COLAB }}
+      MI_JSON:      ${{ secrets.MI_JSON }}
       PYTHONIOENCODING: utf-8
       LANG: en_US.UTF-8
       LC_ALL: en_US.UTF-8
@@ -32,7 +34,6 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           python -m ipykernel install --user --name=python3
 
-      # 1) PRIMERO este notebook
       - name: Ejecutar CC_Estructurados_Comisión.ipynb
         run: |
           mkdir -p outputs
@@ -41,8 +42,8 @@ jobs:
             "outputs/CC_Estructurados_Comisión_out.ipynb" \
             -k python3
 
-      # 2) DESPUÉS este notebook (solo corre si el anterior fue OK)
       - name: Ejecutar Caracterización_2_0.ipynb
+        if: success()
         run: |
           python -m papermill \
             "Caracterización_2_0.ipynb" \
