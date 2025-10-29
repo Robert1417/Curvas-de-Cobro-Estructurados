@@ -1,0 +1,15 @@
+pandas
+numpy
+requests
+matplotlib
+openpyxl
+pyarrow
+pytz
+gspread
+gspread-dataframe
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+papermill
+ipykernel
