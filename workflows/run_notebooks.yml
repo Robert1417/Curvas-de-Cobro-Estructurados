@@ -1,0 +1,57 @@
+name: Ejecutar notebooks (viernes 10pm COL)
+
+on:
+  schedule:
+    # 22:00 Colombia (UTC-5) = 03:00 UTC del sábado
+    - cron: '0 3 * * 6'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      MI_JSON: ${{ secrets.MI_JSON }}
+      PYTHONIOENCODING: utf-8
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python -m ipykernel install --user --name=python3
+
+      # 1) PRIMERO este notebook
+      - name: Ejecutar CC_Estructurados_Comisión.ipynb
+        run: |
+          mkdir -p outputs
+          python -m papermill \
+            "CC_Estructurados_Comisión.ipynb" \
+            "outputs/CC_Estructurados_Comisión_out.ipynb" \
+            -k python3
+
+      # 2) DESPUÉS este notebook (solo corre si el anterior fue OK)
+      - name: Ejecutar Caracterización_2_0.ipynb
+        run: |
+          python -m papermill \
+            "Caracterización_2_0.ipynb" \
+            "outputs/Caracterización_2_0_out.ipynb" \
+            -k python3
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebooks-ejecutados
+          path: outputs/
+          if-no-files-found: error
