@@ -2,6 +2,7 @@ pandas
 numpy
 requests
 matplotlib
+seaborn
 openpyxl
 pyarrow
 pytz
