@@ -18,6 +18,7 @@ jobs:
       PYTHONIOENCODING: utf-8
       LANG: en_US.UTF-8
       LC_ALL: en_US.UTF-8
+      MPLBACKEND: Agg               # <- headless Matplotlib
 
     steps:
       - name: Checkout
@@ -28,11 +29,59 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias (fijo Plotly5 + seaborn)
         run: |
           pip install --upgrade pip
+          # Instala tus requirements primero
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Fuerza versiones para CI (evita el error de titlefont y el import de seaborn)
+          pip install --upgrade --force-reinstall "plotly==5.24.1" seaborn
           python -m ipykernel install --user --name=python3
+
+      # (Opcional) Parche "headless": neutraliza .show() en Plotly/Matplotlib dentro de notebooks
+      - name: Inyectar celda headless (opcional, seguro)
+        run: |
+          python - <<'PY'
+          import nbformat as nbf
+          import pathlib
+
+          def inject_headless(nb_path):
+              nb = nbf.read(nb_path, as_version=4)
+              code = r"""
+          import os
+          os.environ.setdefault("MPLBACKEND","Agg")
+          try:
+              import matplotlib
+              matplotlib.use("Agg")
+              import matplotlib.pyplot as plt
+              def _noop(*a, **k): pass
+              try: plt.show = _noop
+              except Exception: pass
+          except Exception: pass
+
+          try:
+              import plotly.io as pio
+              pio.renderers.default = "json"
+          except Exception:
+              pass
+          try:
+              # Evita que fig.show() haga algo
+              import plotly.graph_objects as go
+              def _noop_show(self, *a, **k): return None
+              go.Figure.show = _noop_show
+          except Exception:
+              pass
+              """
+              cell = nbf.v4.new_code_cell(code, metadata={"tags":["injected-headless"]})
+              nb.cells.insert(0, cell)
+              nbf.write(nb, nb_path)
+
+          for p in ["CC_Estructurados_Comisión.ipynb", "Caracterización_2_0.ipynb"]:
+              path = pathlib.Path(p)
+              if path.exists():
+                  inject_headless(str(path))
+
+          PY
 
       - name: Ejecutar CC_Estructurados_Comisión.ipynb
         run: |
