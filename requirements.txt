@@ -21,4 +21,4 @@ dash-bootstrap-components
 plotly
 flask
 gunicorn
-
+pandas==1.5.3
