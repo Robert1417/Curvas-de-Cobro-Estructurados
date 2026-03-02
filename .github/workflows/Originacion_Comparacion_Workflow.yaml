@@ -1,0 +1,22 @@
+name: Comparación Originación - Estructurados
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - run: pip install nbconvert ipykernel && pip install -r requirements.txt || true
+      - name: Correr Código de Comparación
+        env:
+          MI_JSON: ${{ secrets.MI_JSON }}
+          SECRET_API: ${{ secrets.SECRET_API }}
+          USER_API: ${{ secrets.USER_API }}
+        run: jupyter nbconvert --to notebook --execute Originacion_Estructurados_Comparacion.ipynb --inplace
