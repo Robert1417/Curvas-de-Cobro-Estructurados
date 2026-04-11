@@ -30,4 +30,4 @@ jobs:
         env:
           MI_JSON: ${{ secrets.MI_JSON }}
         run: |
-          python Actualizar Compendio.py
+          python Actualizar_Compendio.py
