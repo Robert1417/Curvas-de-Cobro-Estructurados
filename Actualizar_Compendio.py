@@ -11,9 +11,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 
-# ======================================================
-# CONFIG
-# ======================================================
 SPREADSHEET_ID = "1h0ufsJz8d94uFKs83hdyJQUR57mmFtC8wvFHwNDTFFE"
 FOLDER_ID = "1cf2p3R7iM0xowAt4muEruDwxZoZqD_jB"
 
@@ -33,28 +30,9 @@ COLUMNAS_NECESARIAS = [
 
 MESES_A_BUSCAR = 3
 
-MES_MAP = {
-    "ene": 1,"feb": 2,"mar": 3,"abr": 4,"may": 5,"jun": 6,
-    "jul": 7,"ago": 8,"sep": 9,"oct": 10,"nov": 11,"dic": 12,
-}
 
-MES_NOMBRE = {
-    1: "Enero",2: "Febrero",3: "Marzo",4: "Abril",
-    5: "Mayo",6: "Junio",7: "Julio",8: "Agosto",
-    9: "Septiembre",10: "Octubre",11: "Noviembre",12: "Diciembre",
-}
-
-
-# ======================================================
-# AUTH
-# ======================================================
-def get_credentials() -> Credentials:
-    mi_json = os.environ.get("MI_JSON")
-    if not mi_json:
-        raise ValueError("No se encontró MI_JSON")
-
-    info: Dict = json.loads(mi_json)
-
+def get_credentials():
+    info = json.loads(os.environ["MI_JSON"])
     return Credentials.from_service_account_info(
         info,
         scopes=[
@@ -69,202 +47,169 @@ drive_service = build("drive", "v3", credentials=creds)
 sheets_service = build("sheets", "v4", credentials=creds)
 
 
-# ======================================================
-# HELPERS
-# ======================================================
-def to_key(value) -> str:
-    if value is None:
+def to_key(v):
+    if v is None:
         return ""
-
-    if isinstance(value, float):
-        if pd.isna(value):
+    if isinstance(v, float):
+        if pd.isna(v):
             return ""
-        if value.is_integer():
-            return str(int(value))
-        return str(value).rstrip("0").rstrip(".")
-
-    if isinstance(value, int):
-        return str(value)
-
-    s = str(value).strip()
-    if not s:
-        return ""
-
-    if re.fullmatch(r"\d+\.0+", s):
-        s = re.sub(r"\.0+$", "", s)
-
-    return s
+        if v.is_integer():
+            return str(int(v))
+    return str(v).strip()
 
 
-def shift_months(dt: datetime, delta: int) -> datetime:
-    year = dt.year + (dt.month - 1 + delta) // 12
-    month = (dt.month - 1 + delta) % 12 + 1
-    return datetime(year, month, 1)
+def shift_months(dt, m):
+    y = dt.year + (dt.month - 1 + m) // 12
+    mo = (dt.month - 1 + m) % 12 + 1
+    return datetime(y, mo, 1)
 
 
-def get_last_n_months(n: int):
+def get_last_3():
     today = datetime.today()
     base = shift_months(datetime(today.year, today.month, 1), -1)
-    return [shift_months(base, -i) for i in range(n)]
+    return [shift_months(base, -i) for i in range(MESES_A_BUSCAR)]
 
 
-def sheet_name_from_date(dt: datetime) -> str:
-    return f"{MES_NOMBRE[dt.month]} {dt.year}"
+MES = {
+    1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",
+    5:"Mayo",6:"Junio",7:"Julio",8:"Agosto",
+    9:"Septiembre",10:"Octubre",11:"Noviembre",12:"Diciembre"
+}
 
 
-# ======================================================
-# DRIVE
-# ======================================================
-def parse_range_from_filename(name: str):
-    m = re.search(r"([A-Za-z]{3})(\d{2})\s*-\s*([A-Za-z]{3})(\d{2})", name, re.I)
+def sheet_name(dt):
+    return f"{MES[dt.month]} {dt.year}"
+
+
+def parse_range(name):
+    m = re.search(r"([A-Za-z]{3})(\d{2})\s*-\s*([A-Za-z]{3})(\d{2})", name,re.I)
     if not m:
         return None
-
-    m1, y1, m2, y2 = m.group(1).lower(), m.group(2), m.group(3).lower(), m.group(4)
-
+    map_={"ene":1,"feb":2,"mar":3,"abr":4,"may":5,"jun":6,
+          "jul":7,"ago":8,"sep":9,"oct":10,"nov":11,"dic":12}
     return (
-        2000 + int(y1),
-        MES_MAP[m1],
-        2000 + int(y2),
-        MES_MAP[m2],
+        2000+int(m.group(2)),
+        map_[m.group(1).lower()],
+        2000+int(m.group(4)),
+        map_[m.group(3).lower()],
     )
 
 
-def list_files(folder_id):
-    q = f"'{folder_id}' in parents and trashed=false and name contains 'Asignaciones de Cartera'"
-    files = []
-    page = None
-
-    while True:
-        resp = drive_service.files().list(
-            q=q,
-            fields="nextPageToken, files(id,name,mimeType,modifiedTime)",
-            pageToken=page,
-        ).execute()
-
-        for f in resp.get("files", []):
-            fr = parse_range_from_filename(f["name"])
-            if fr:
-                f["parsed_range"] = fr
-                files.append(f)
-
-        page = resp.get("nextPageToken")
-        if not page:
-            break
-
-    return files
+def list_files():
+    q=f"'{FOLDER_ID}' in parents and trashed=false and name contains 'Asignaciones de Cartera'"
+    res=drive_service.files().list(q=q,fields="files(id,name,mimeType)").execute()
+    out=[]
+    for f in res["files"]:
+        r=parse_range(f["name"])
+        if r:
+            f["range"]=r
+            out.append(f)
+    return out
 
 
-def covers(range_, dt):
-    sy, sm, ey, em = range_
-    t = dt.year * 12 + dt.month
-    a = sy * 12 + sm
-    b = ey * 12 + em
-    return a <= t <= b
+def covers(r,dt):
+    sy,sm,ey,em=r
+    t=dt.year*12+dt.month
+    a=sy*12+sm
+    b=ey*12+em
+    return a<=t<=b
 
 
-def pick_file(files, dt):
+def pick(files,dt):
     for f in files:
-        if covers(f["parsed_range"], dt):
+        if covers(f["range"],dt):
             return f
-    raise Exception("archivo no encontrado")
+    raise Exception("no file")
 
 
-def download_excel(file):
-    buffer = io.BytesIO()
-
-    if file["mimeType"] == "application/vnd.google-apps.spreadsheet":
-        req = drive_service.files().export_media(
+def download(file):
+    buf=io.BytesIO()
+    if file["mimeType"]=="application/vnd.google-apps.spreadsheet":
+        req=drive_service.files().export_media(
             fileId=file["id"],
-            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
-        req = drive_service.files().get_media(fileId=file["id"])
+        req=drive_service.files().get_media(fileId=file["id"])
 
-    downloader = MediaIoBaseDownload(buffer, req)
-    done = False
+    d=MediaIoBaseDownload(buf,req)
+    done=False
     while not done:
-        _, done = downloader.next_chunk()
+        _,done=d.next_chunk()
 
-    buffer.seek(0)
-    return buffer
+    buf.seek(0)
+    return buf
 
 
-def load_last_3_months():
-    months = get_last_n_months(MESES_A_BUSCAR)
-    files = list_files(FOLDER_ID)
-
-    dfs = []
-
-    for m in months:
+def load():
+    files=list_files()
+    dfs=[]
+    for m in get_last_3():
         try:
-            file = pick_file(files, m)
-            buffer = download_excel(file)
-            df = pd.read_excel(buffer, sheet_name=sheet_name_from_date(m))
+            f=pick(files,m)
+            buf=download(f)
+            df=pd.read_excel(buf,sheet_name=sheet_name(m))
             dfs.append(df)
         except:
             pass
+    return pd.concat(dfs,ignore_index=True)
 
-    return pd.concat(dfs, ignore_index=True)
 
-
-# ======================================================
-# SHEETS
-# ======================================================
-def read_col(range_):
-    res = sheets_service.spreadsheets().values().get(
+def read(range_):
+    res=sheets_service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range=range_,
+        range=range_
     ).execute()
+    return res.get("values",[])
 
-    return res.get("values", [])
 
-
-def append_rows(rows):
+def append(rows):
     sheets_service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{HOJA_DESTINO}!A1",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
-        body={"values": rows},
+        body={"values":rows}
     ).execute()
 
 
-# ======================================================
-# MAIN
-# ======================================================
+def clean_value(v):
+    if pd.isna(v):
+        return ""
+    if isinstance(v,pd.Timestamp):
+        return v.strftime("%d/%m/%Y")
+    return v
+
+
 def main():
 
-    refs = {to_key(r[0]) for r in read_col(f"{HOJA_DATA}!A2:A") if r}
+    refs={to_key(r[0]) for r in read(f"{HOJA_DATA}!A2:A") if r}
+    ids={to_key(r[0]) for r in read(f"{HOJA_DESTINO}!B2:B") if r}
 
-    ids_existentes = {
-        to_key(r[0])
-        for r in read_col(f"{HOJA_DESTINO}!B2:B")
-        if r
-    }
+    df=load()
+    df=df[COLUMNAS_NECESARIAS]
 
-    df = load_last_3_months()
+    df["ref"]=df["Referencia"].apply(to_key)
+    df["id"]=df["Id deuda"].apply(to_key)
 
-    df = df[COLUMNAS_NECESARIAS]
-
-    df["ref"] = df["Referencia"].apply(to_key)
-    df["id"] = df["Id deuda"].apply(to_key)
-
-    df = df[df["ref"].isin(refs)]
+    df=df[df["ref"].isin(refs)]
 
     # id deuda unico
-    df = df.drop_duplicates("id", keep="first")
+    df=df.drop_duplicates("id",keep="first")
 
     # excluir existentes
-    df = df[~df["id"].isin(ids_existentes)]
+    df=df[~df["id"].isin(ids)]
 
-    rows = df[COLUMNAS_NECESARIAS].values.tolist()
+    rows=[
+        [clean_value(v) for v in row]
+        for row in df[COLUMNAS_NECESARIAS].values
+    ]
 
     if rows:
-        append_rows(rows)
+        append(rows)
 
-    print("ok")
+    print("OK")
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
