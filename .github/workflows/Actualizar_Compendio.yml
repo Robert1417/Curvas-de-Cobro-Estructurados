@@ -1,0 +1,33 @@
+name: Actualizar_Compendio
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 15:00 UTC los días 4, 5 y 6 de cada mes
+    - cron: "0 15 4 * *"
+    - cron: "0 15 5 * *"
+    - cron: "0 15 6 * *"
+
+jobs:
+  run-cartera:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run script
+        env:
+          MI_JSON: ${{ secrets.MI_JSON }}
+        run: |
+          python Actualizar Compendio.py
