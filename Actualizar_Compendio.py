@@ -31,34 +31,17 @@ COLUMNAS_NECESARIAS = [
     "Meses de atraso",
 ]
 
+MESES_A_BUSCAR = 3
+
 MES_MAP = {
-    "ene": 1,
-    "feb": 2,
-    "mar": 3,
-    "abr": 4,
-    "may": 5,
-    "jun": 6,
-    "jul": 7,
-    "ago": 8,
-    "sep": 9,
-    "oct": 10,
-    "nov": 11,
-    "dic": 12,
+    "ene": 1,"feb": 2,"mar": 3,"abr": 4,"may": 5,"jun": 6,
+    "jul": 7,"ago": 8,"sep": 9,"oct": 10,"nov": 11,"dic": 12,
 }
 
 MES_NOMBRE = {
-    1: "Enero",
-    2: "Febrero",
-    3: "Marzo",
-    4: "Abril",
-    5: "Mayo",
-    6: "Junio",
-    7: "Julio",
-    8: "Agosto",
-    9: "Septiembre",
-    10: "Octubre",
-    11: "Noviembre",
-    12: "Diciembre",
+    1: "Enero",2: "Febrero",3: "Marzo",4: "Abril",
+    5: "Mayo",6: "Junio",7: "Julio",8: "Agosto",
+    9: "Septiembre",10: "Octubre",11: "Noviembre",12: "Diciembre",
 }
 
 
@@ -68,7 +51,7 @@ MES_NOMBRE = {
 def get_credentials() -> Credentials:
     mi_json = os.environ.get("MI_JSON")
     if not mi_json:
-        raise ValueError("No se encontró MI_JSON en variables de entorno")
+        raise ValueError("No se encontró MI_JSON")
 
     info: Dict = json.loads(mi_json)
 
@@ -87,26 +70,9 @@ sheets_service = build("sheets", "v4", credentials=creds)
 
 
 # ======================================================
-# HELPERS DE TEXTO / FECHAS
+# HELPERS
 # ======================================================
-def normalizar_texto(txt: str) -> str:
-    if txt is None:
-        return ""
-    txt = str(txt).strip().lower()
-    replacements = str.maketrans(
-        "áéíóúüñ",
-        "aeiouun",
-    )
-    txt = txt.translate(replacements)
-    txt = re.sub(r"\s+", " ", txt)
-    return txt
-
-
 def to_key(value) -> str:
-    """
-    Normaliza referencias para comparar sin problemas de tipo:
-    123, "123", 123.0, "123.0" => "123"
-    """
     if value is None:
         return ""
 
@@ -130,117 +96,92 @@ def to_key(value) -> str:
     return s
 
 
-def get_previous_month_date() -> datetime:
-    today = datetime.today()
-    year = today.year
-    month = today.month - 1
-
-    if month == 0:
-        month = 12
-        year -= 1
-
+def shift_months(dt: datetime, delta: int) -> datetime:
+    year = dt.year + (dt.month - 1 + delta) // 12
+    month = (dt.month - 1 + delta) % 12 + 1
     return datetime(year, month, 1)
+
+
+def get_last_n_months(n: int):
+    today = datetime.today()
+    base = shift_months(datetime(today.year, today.month, 1), -1)
+    return [shift_months(base, -i) for i in range(n)]
 
 
 def sheet_name_from_date(dt: datetime) -> str:
     return f"{MES_NOMBRE[dt.month]} {dt.year}"
 
 
-def month_index(year: int, month: int) -> int:
-    return year * 12 + month
-
-
 # ======================================================
-# DRIVE: ARCHIVOS ORIGEN
+# DRIVE
 # ======================================================
-def parse_range_from_filename(name: str) -> Optional[Tuple[int, int, int, int]]:
-    """
-    Ejemplo:
-    Asignaciones de Cartera Ene26-Abr26.xlsx
-    """
-    m = re.search(r"([A-Za-z]{3})(\d{2})\s*-\s*([A-Za-z]{3})(\d{2})", name, flags=re.IGNORECASE)
+def parse_range_from_filename(name: str):
+    m = re.search(r"([A-Za-z]{3})(\d{2})\s*-\s*([A-Za-z]{3})(\d{2})", name, re.I)
     if not m:
         return None
 
     m1, y1, m2, y2 = m.group(1).lower(), m.group(2), m.group(3).lower(), m.group(4)
 
-    if m1 not in MES_MAP or m2 not in MES_MAP:
-        return None
-
-    return (2000 + int(y1), MES_MAP[m1], 2000 + int(y2), MES_MAP[m2])
-
-
-def file_covers_month(file_range: Tuple[int, int, int, int], target_dt: datetime) -> bool:
-    sy, sm, ey, em = file_range
-    t = month_index(target_dt.year, target_dt.month)
-    a = month_index(sy, sm)
-    b = month_index(ey, em)
-    return a <= t <= b
+    return (
+        2000 + int(y1),
+        MES_MAP[m1],
+        2000 + int(y2),
+        MES_MAP[m2],
+    )
 
 
-def list_assignment_files_in_folder(folder_id: str) -> List[Dict]:
+def list_files(folder_id):
     q = f"'{folder_id}' in parents and trashed=false and name contains 'Asignaciones de Cartera'"
-    files: List[Dict] = []
-    page_token = None
+    files = []
+    page = None
 
     while True:
-        resp = (
-            drive_service.files()
-            .list(
-                q=q,
-                fields="nextPageToken, files(id,name,mimeType,modifiedTime)",
-                pageToken=page_token,
-            )
-            .execute()
-        )
+        resp = drive_service.files().list(
+            q=q,
+            fields="nextPageToken, files(id,name,mimeType,modifiedTime)",
+            pageToken=page,
+        ).execute()
 
         for f in resp.get("files", []):
-            fr = parse_range_from_filename(f.get("name", ""))
+            fr = parse_range_from_filename(f["name"])
             if fr:
                 f["parsed_range"] = fr
                 files.append(f)
 
-        page_token = resp.get("nextPageToken")
-        if not page_token:
+        page = resp.get("nextPageToken")
+        if not page:
             break
-
-    if not files:
-        raise ValueError("No encontré archivos 'Asignaciones de Cartera' válidos en la carpeta")
 
     return files
 
 
-def pick_file_for_month(files_meta: List[Dict], target_dt: datetime) -> Dict:
-    candidates = []
-    for f in files_meta:
-        fr = f["parsed_range"]
-        if file_covers_month(fr, target_dt):
-            sy, sm, ey, em = fr
-            span = month_index(ey, em) - month_index(sy, sm)
-            candidates.append((span, f.get("modifiedTime", ""), f))
-
-    if not candidates:
-        raise ValueError(f"No encontré archivo que cubra el mes {sheet_name_from_date(target_dt)}")
-
-    candidates.sort(key=lambda x: (x[0], x[1]))
-    min_span = candidates[0][0]
-    same_span = [c for c in candidates if c[0] == min_span]
-    same_span.sort(key=lambda x: x[1], reverse=True)
-    return same_span[0][2]
+def covers(range_, dt):
+    sy, sm, ey, em = range_
+    t = dt.year * 12 + dt.month
+    a = sy * 12 + sm
+    b = ey * 12 + em
+    return a <= t <= b
 
 
-def download_file_to_buffer(file_id: str, mime_type: str) -> io.BytesIO:
+def pick_file(files, dt):
+    for f in files:
+        if covers(f["parsed_range"], dt):
+            return f
+    raise Exception("archivo no encontrado")
+
+
+def download_excel(file):
     buffer = io.BytesIO()
 
-    if mime_type == "application/vnd.google-apps.spreadsheet":
-        request = drive_service.files().export_media(
-            fileId=file_id,
+    if file["mimeType"] == "application/vnd.google-apps.spreadsheet":
+        req = drive_service.files().export_media(
+            fileId=file["id"],
             mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     else:
-        request = drive_service.files().get_media(fileId=file_id)
+        req = drive_service.files().get_media(fileId=file["id"])
 
-    downloader = MediaIoBaseDownload(buffer, request)
+    downloader = MediaIoBaseDownload(buffer, req)
     done = False
     while not done:
         _, done = downloader.next_chunk()
@@ -249,185 +190,80 @@ def download_file_to_buffer(file_id: str, mime_type: str) -> io.BytesIO:
     return buffer
 
 
-def load_previous_month_source_df(folder_id: str) -> pd.DataFrame:
-    target_dt = get_previous_month_date()
-    target_sheet = sheet_name_from_date(target_dt)
+def load_last_3_months():
+    months = get_last_n_months(MESES_A_BUSCAR)
+    files = list_files(FOLDER_ID)
 
-    files_meta = list_assignment_files_in_folder(folder_id)
-    selected_file = pick_file_for_month(files_meta, target_dt)
+    dfs = []
 
-    print(f"Archivo elegido: {selected_file['name']}")
-    print(f"Hoja objetivo: {target_sheet}")
+    for m in months:
+        try:
+            file = pick_file(files, m)
+            buffer = download_excel(file)
+            df = pd.read_excel(buffer, sheet_name=sheet_name_from_date(m))
+            dfs.append(df)
+        except:
+            pass
 
-    buffer = download_file_to_buffer(selected_file["id"], selected_file["mimeType"])
-    df = pd.read_excel(buffer, sheet_name=target_sheet, engine="openpyxl")
-
-    if df.shape[0] == 0:
-        raise ValueError(f"La hoja {target_sheet} está vacía")
-
-    return df
+    return pd.concat(dfs, ignore_index=True)
 
 
 # ======================================================
-# SHEETS: LEER / ESCRIBIR
+# SHEETS
 # ======================================================
-def get_sheet_values(spreadsheet_id: str, range_a1: str) -> List[List]:
-    result = (
-        sheets_service.spreadsheets()
-        .values()
-        .get(spreadsheetId=spreadsheet_id, range=range_a1)
-        .execute()
-    )
-    return result.get("values", [])
+def read_col(range_):
+    res = sheets_service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=range_,
+    ).execute()
+
+    return res.get("values", [])
 
 
-def ensure_sheet_exists_with_headers(spreadsheet_id: str, sheet_name: str, headers: List[str]) -> None:
-    spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    sheets = spreadsheet.get("sheets", [])
-    existing_names = [s["properties"]["title"] for s in sheets]
-
-    if sheet_name not in existing_names:
-        requests = [{
-            "addSheet": {
-                "properties": {
-                    "title": sheet_name
-                }
-            }
-        }]
-        sheets_service.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={"requests": requests},
-        ).execute()
-
-    current = get_sheet_values(spreadsheet_id, f"'{sheet_name}'!1:1")
-    if not current or current[0] != headers:
-        sheets_service.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"'{sheet_name}'!A1",
-            valueInputOption="RAW",
-            body={"values": [headers]},
-        ).execute()
-
-
-def append_rows(spreadsheet_id: str, sheet_name: str, rows: List[List]) -> None:
-    if not rows:
-        return
-
+def append_rows(rows):
     sheets_service.spreadsheets().values().append(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{sheet_name}'!A1",
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{HOJA_DESTINO}!A1",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": rows},
     ).execute()
 
 
-def obtener_referencias_data(spreadsheet_id: str, hoja_data: str) -> set:
-    values = get_sheet_values(spreadsheet_id, f"'{hoja_data}'!A2:A")
-    referencias = set()
-
-    for row in values:
-        if not row:
-            continue
-        key = to_key(row[0])
-        if key:
-            referencias.add(key)
-
-    return referencias
-
-
-def obtener_referencias_existentes_destino(spreadsheet_id: str, hoja_destino: str) -> set:
-    values = get_sheet_values(spreadsheet_id, f"'{hoja_destino}'!A2:A")
-    existentes = set()
-
-    for row in values:
-        if not row:
-            continue
-        key = to_key(row[0])
-        if key:
-            existentes.add(key)
-
-    return existentes
-
-
-# ======================================================
-# DATAFRAME: EXTRAER Y FILTRAR
-# ======================================================
-def select_required_columns(df: pd.DataFrame, required_columns: List[str]) -> pd.DataFrame:
-    df_cols_normalized = {normalizar_texto(c): c for c in df.columns}
-    selected_real_columns = []
-
-    for req in required_columns:
-        req_norm = normalizar_texto(req)
-        if req_norm not in df_cols_normalized:
-            raise ValueError(f"No encontré la columna requerida: {req}")
-        selected_real_columns.append(df_cols_normalized[req_norm])
-
-    result = df[selected_real_columns].copy()
-    result.columns = required_columns
-    return result
-
-
-def preparar_filas_nuevas(df_source: pd.DataFrame, referencias_data: set, referencias_destino: set) -> List[List]:
-    df = select_required_columns(df_source, COLUMNAS_NECESARIAS).copy()
-
-    df["__ref_key__"] = df["Referencia"].apply(to_key)
-    df = df[df["__ref_key__"] != ""]
-    df = df[df["__ref_key__"].isin(referencias_data)]
-    df = df[~df["__ref_key__"].isin(referencias_destino)]
-
-    if df.empty:
-        return []
-
-    rows = []
-    for _, row in df.iterrows():
-        values = []
-        for col in COLUMNAS_NECESARIAS:
-            val = row[col]
-
-            if pd.isna(val):
-                values.append("")
-            elif isinstance(val, pd.Timestamp):
-                values.append(val.strftime("%d/%m/%Y"))
-            else:
-                values.append(val)
-
-        rows.append(values)
-
-    return rows
-
-
 # ======================================================
 # MAIN
 # ======================================================
 def main():
-    print("Iniciando proceso...")
 
-    referencias_data = obtener_referencias_data(SPREADSHEET_ID, HOJA_DATA)
-    print(f"Referencias en Data: {len(referencias_data)}")
+    refs = {to_key(r[0]) for r in read_col(f"{HOJA_DATA}!A2:A") if r}
 
-    ensure_sheet_exists_with_headers(SPREADSHEET_ID, HOJA_DESTINO, COLUMNAS_NECESARIAS)
+    ids_existentes = {
+        to_key(r[0])
+        for r in read_col(f"{HOJA_DESTINO}!B2:B")
+        if r
+    }
 
-    referencias_destino = obtener_referencias_existentes_destino(SPREADSHEET_ID, HOJA_DESTINO)
-    print(f"Referencias ya existentes en '{HOJA_DESTINO}': {len(referencias_destino)}")
+    df = load_last_3_months()
 
-    df_source = load_previous_month_source_df(FOLDER_ID)
+    df = df[COLUMNAS_NECESARIAS]
 
-    nuevas_filas = preparar_filas_nuevas(
-        df_source=df_source,
-        referencias_data=referencias_data,
-        referencias_destino=referencias_destino,
-    )
+    df["ref"] = df["Referencia"].apply(to_key)
+    df["id"] = df["Id deuda"].apply(to_key)
 
-    print(f"Nuevas filas a agregar: {len(nuevas_filas)}")
+    df = df[df["ref"].isin(refs)]
 
-    if nuevas_filas:
-        append_rows(SPREADSHEET_ID, HOJA_DESTINO, nuevas_filas)
-        print("Filas agregadas correctamente.")
-    else:
-        print("No hay filas nuevas para agregar.")
+    # id deuda unico
+    df = df.drop_duplicates("id", keep="first")
 
-    print("Proceso terminado.")
+    # excluir existentes
+    df = df[~df["id"].isin(ids_existentes)]
+
+    rows = df[COLUMNAS_NECESARIAS].values.tolist()
+
+    if rows:
+        append_rows(rows)
+
+    print("ok")
 
 
 if __name__ == "__main__":
